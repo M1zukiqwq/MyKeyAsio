@@ -9,6 +9,8 @@ namespace KeyAsio.Shared.Sync.AudioProviders;
 
 public class ManiaHitsoundSequencer : IHitsoundSequencer
 {
+    private const int AudioLatencyTolerance = 400;
+
     private readonly ILogger<ManiaHitsoundSequencer> _logger;
     private readonly AppSettings _appSettings;
     private readonly SyncSessionContext _syncSessionContext;
@@ -213,10 +215,16 @@ public class ManiaHitsoundSequencer : IHitsoundSequencer
                 break;
             }
 
-            if (playTime < firstNode.Offset + 200 &&
-                _gameplayAudioService.TryGetAudioByNode(firstNode, out var cachedSound))
+            if (playTime < firstNode.Offset + AudioLatencyTolerance)
             {
-                buffer.Add(new PlaybackInfo(cachedSound, firstNode));
+                if (_gameplayAudioService.TryGetAudioByNode(firstNode, out var cachedSound))
+                {
+                    buffer.Add(new PlaybackInfo(cachedSound, firstNode));
+                }
+                else
+                {
+                    break;
+                }
             }
 
             if (includeKey)

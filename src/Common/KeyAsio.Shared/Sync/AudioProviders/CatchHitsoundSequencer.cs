@@ -9,7 +9,7 @@ namespace KeyAsio.Shared.Sync.AudioProviders;
 
 public class CatchHitsoundSequencer : IHitsoundSequencer
 {
-    private const int AudioLatencyTolerance = 200;
+    private const int AudioLatencyTolerance = 400;
 
     private readonly ILogger<CatchHitsoundSequencer> _logger;
     private readonly AppSettings _appSettings;
@@ -137,30 +137,25 @@ public class CatchHitsoundSequencer : IHitsoundSequencer
         {
             if (playTime < node.Offset)
             {
-                // Not yet time
                 break;
             }
 
-            bool mustDispatchControlSignal = node is ControlEvent
-            {
-                ControlEventType: ControlEventType.LoopStop or ControlEventType.Volume or ControlEventType.Balance
-            };
-
-            // Control signals must never be dropped because they release/update active loops.
-            if (mustDispatchControlSignal)
+            if (node is ControlEvent { IsDispatchableControlSignal: true })
             {
                 buffer.Add(new PlaybackInfo(null, node));
             }
-            // Only play if within tolerance
             else if (playTime < node.Offset + AudioLatencyTolerance)
             {
                 if (_gameplayAudioService.TryGetAudioByNode(node, out var cachedSound))
                 {
                     buffer.Add(new PlaybackInfo(cachedSound, node));
                 }
+                else
+                {
+                    break;
+                }
             }
 
-            // Dequeue regardless of whether played (played, timed out, or missing resource)
             queue.Dequeue();
         }
     }

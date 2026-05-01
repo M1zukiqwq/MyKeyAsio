@@ -9,7 +9,7 @@ namespace KeyAsio.Shared.Sync.AudioProviders;
 
 public class StandardHitsoundSequencer : IHitsoundSequencer
 {
-    private const int AudioLatencyTolerance = 200;
+    private const int AudioLatencyTolerance = 400;
 
     private readonly ILogger<StandardHitsoundSequencer> _logger;
     private readonly AppSettings _appSettings;
@@ -229,31 +229,26 @@ public class StandardHitsoundSequencer : IHitsoundSequencer
         {
             if (playTime < node.Offset)
             {
-                // 时间未到
                 break;
             }
 
-            bool mustDispatchControlSignal = node is ControlEvent
-            {
-                ControlEventType: ControlEventType.LoopStop or ControlEventType.Volume or ControlEventType.Balance
-            };
-
-            // LoopStop/Volume/Balance 是控制信号，绝不能因为延迟或缓存未命中被丢弃
-            if (mustDispatchControlSignal)
+            if (node is ControlEvent { IsDispatchableControlSignal: true })
             {
                 buffer.Add(new PlaybackInfo(null, node));
             }
-
-            // 其他事件仍遵循延迟容忍窗口
             else if (playTime < node.Offset + AudioLatencyTolerance)
             {
                 if (_gameplayAudioService.TryGetAudioByNode(node, out var cachedSound))
                 {
                     buffer.Add(new PlaybackInfo(cachedSound, node));
                 }
+                else
+                {
+                    // Audio not cached yet, retry next tick
+                    break;
+                }
             }
 
-            // 无论是否播放（播放了 or 超时了 or 找不到资源），只要时间到了就移除
             queue.Dequeue();
         }
     }

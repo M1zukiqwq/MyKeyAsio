@@ -8,6 +8,9 @@ public class ControlEvent : PlaybackEvent
     public LoopChannel LoopChannel { get; internal set; }
     public ControlEventType ControlEventType { get; internal set; }
 
+    public bool IsDispatchableControlSignal => ControlEventType is
+        ControlEventType.LoopStop or ControlEventType.Volume or ControlEventType.Balance;
+
     public string DebuggerDisplay => $"CT{(ResourceOwner == ResourceOwner.UserSkin ? "D" : "")}:{Offset}: " +
                                      $"O{Offset}: " +
                                      $"T{(int)ControlEventType}{(ControlEventType is ControlEventType.LoopStart or ControlEventType.LoopStop ? (int)LoopChannel : "")}: " +

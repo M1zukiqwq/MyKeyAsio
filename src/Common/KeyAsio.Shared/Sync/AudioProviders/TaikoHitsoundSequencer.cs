@@ -11,7 +11,7 @@ namespace KeyAsio.Shared.Sync.AudioProviders;
 
 public class TaikoHitsoundSequencer : IHitsoundSequencer
 {
-    private const int AudioLatencyTolerance = 200;
+    private const int AudioLatencyTolerance = 400;
 
     private readonly ILogger<TaikoHitsoundSequencer> _logger;
     private readonly AppSettings _appSettings;
@@ -359,30 +359,25 @@ public class TaikoHitsoundSequencer : IHitsoundSequencer
         {
             if (playTime < node.Offset)
             {
-                // 时间未到
                 break;
             }
 
-            bool mustDispatchControlSignal = node is ControlEvent
-            {
-                ControlEventType: ControlEventType.LoopStop or ControlEventType.Volume or ControlEventType.Balance
-            };
-
-            // Loop control signals must be dispatched even if delayed.
-            if (mustDispatchControlSignal)
+            if (node is ControlEvent { IsDispatchableControlSignal: true })
             {
                 buffer.Add(new PlaybackInfo(null, node));
             }
-            // 只有在延迟容忍度内才播放
             else if (playTime < node.Offset + AudioLatencyTolerance)
             {
                 if (_gameplayAudioService.TryGetAudioByNode(node, out var cachedSound))
                 {
                     buffer.Add(new PlaybackInfo(cachedSound, node));
                 }
+                else
+                {
+                    break;
+                }
             }
 
-            // 无论是否播放（播放了 or 超时了 or 找不到资源），只要时间到了就移除
             queue.Dequeue();
         }
     }

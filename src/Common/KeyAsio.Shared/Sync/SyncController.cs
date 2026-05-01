@@ -148,6 +148,7 @@ public class SyncController : IDisposable
             {
                 cachedHandlers = _pluginManager.GetActiveHandlers(currentStatus).ToList();
                 cachedStatus = currentStatus;
+                oldTime = newTime;
             }
 
             // Invoke plugins

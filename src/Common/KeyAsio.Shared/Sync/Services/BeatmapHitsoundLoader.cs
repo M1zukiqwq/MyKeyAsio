@@ -33,6 +33,7 @@ public class BeatmapHitsoundLoader
     {
         _keyList.Clear();
         _playbackList.Clear();
+        _nextCachingTime = 0;
 
         var beatmapSetContext = new BeatmapSetContext(folder);
         using (DebugUtils.CreateTimer("InitFolder", _logger))
