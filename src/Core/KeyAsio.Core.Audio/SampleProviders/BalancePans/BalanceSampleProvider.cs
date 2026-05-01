@@ -1,13 +1,19 @@
-﻿using NAudio.Wave;
+﻿using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using NAudio.Wave;
 
 namespace KeyAsio.Core.Audio.SampleProviders.BalancePans;
 
 public sealed class BalanceSampleProvider : ISampleProvider
 {
     private readonly ISampleProvider _sourceProvider;
-    private float _leftVolume = 0.5f;
-    private float _rightVolume = 0.5f;
+    private float _leftVolume = 1f;
+    private float _rightVolume = 1f;
     private readonly int _channels;
+
+    private static readonly Vector256<int> s_dupLMask256 = Vector256.Create(0, 0, 2, 2, 4, 4, 6, 6);
+    private static readonly Vector128<int> s_dupLMask128 = Vector128.Create(0, 0, 2, 2);
 
     public BalanceSampleProvider(ISampleProvider sourceProvider)
     {
@@ -15,7 +21,6 @@ public sealed class BalanceSampleProvider : ISampleProvider
         _channels = _sourceProvider.WaveFormat.Channels;
         if (_channels > 2)
             throw new NotSupportedException("channels: " + _channels);
-        Balance = 0f;
     }
 
     public float Balance
@@ -23,7 +28,8 @@ public sealed class BalanceSampleProvider : ISampleProvider
         get => (_rightVolume - _leftVolume) * 2;
         set
         {
-            FixBalanceRange(ref value);
+            if (value > 1f) value = 1f;
+            else if (value < -1f) value = -1f;
 
             if (value > 0)
             {
@@ -44,59 +50,58 @@ public sealed class BalanceSampleProvider : ISampleProvider
     }
 
     public WaveFormat WaveFormat => _sourceProvider.WaveFormat;
+
     public int Read(float[] buffer, int offset, int count)
     {
         if (count == 0) return 0;
         int samplesRead = _sourceProvider.Read(buffer, offset, count);
-        if (_channels != 2) return samplesRead;
-        if (Balance == 0) return samplesRead;
+        if (_channels != 2 || Balance == 0) return samplesRead;
 
-        if ((count & 3) == 0)
+        float leftVol = _leftVolume;
+        float crossVol = 1f - leftVol;
+
+        int i = 0;
+        ref float dataRef = ref buffer[offset];
+        int total = samplesRead;
+
+        if (Vector256.IsHardwareAccelerated)
         {
-            for (int n = 0; n < count; n += 4)
+            var vSelf = Vector256.Create(leftVol, 1f, leftVol, 1f, leftVol, 1f, leftVol, 1f);
+            var vCross = Vector256.Create(0f, crossVol, 0f, crossVol, 0f, crossVol, 0f, crossVol);
+            int limit = total - Vector256<float>.Count;
+
+            for (; i <= limit; i += Vector256<float>.Count)
             {
-                var i0 = offset + n;
-                var i1 = i0 + 1;
-                var i2 = i0 + 2;
-                var i3 = i0 + 3;
-
-                var d0New = buffer[i0] * _leftVolume;
-                var d0Diff = buffer[i0] - d0New;
-                buffer[i0] = d0New;
-                buffer[i1] += d0Diff;
-
-                var d2New = buffer[i2] * _leftVolume;
-                var d2Diff = buffer[i2] - d2New;
-                buffer[i2] = d2New;
-                buffer[i3] += d2Diff;
+                var vIn = Vector256.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+                var vDupL = Vector256.Shuffle(vIn, s_dupLMask256);
+                var vOut = vIn * vSelf + vDupL * vCross;
+                vOut.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
             }
         }
         else
         {
-            for (int n = 0; n < count; n += 2)
-            {
-                var i0 = offset + n;
-                var i1 = i0 + 1;
+            var vSelf = Vector128.Create(leftVol, 1f, leftVol, 1f);
+            var vCross = Vector128.Create(0f, crossVol, 0f, crossVol);
+            int limit = total - Vector128<float>.Count;
 
-                var d0New = buffer[i0] * _leftVolume;
-                var d0Diff = buffer[i0] - d0New;
-                buffer[i0] = d0New;
-                buffer[i1] += d0Diff;
+            for (; i <= limit; i += Vector128<float>.Count)
+            {
+                var vIn = Vector128.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+                var vDupL = Vector128.Shuffle(vIn, s_dupLMask128);
+                var vOut = vIn * vSelf + vDupL * vCross;
+                vOut.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
             }
         }
 
-        return samplesRead;
-    }
+        for (; i < total; i += 2)
+        {
+            ref float lRef = ref Unsafe.Add(ref dataRef, i);
+            float d0New = lRef * leftVol;
+            float d0Diff = lRef - d0New;
+            lRef = d0New;
+            Unsafe.Add(ref dataRef, i + 1) += d0Diff;
+        }
 
-    private static void FixBalanceRange(ref float value)
-    {
-        if (value > 1f)
-        {
-            value = 1f;
-        }
-        else if (value < -1f)
-        {
-            value = -1f;
-        }
+        return samplesRead;
     }
 }

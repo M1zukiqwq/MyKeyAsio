@@ -1,10 +1,13 @@
-﻿using NAudio.Wave;
+﻿using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using NAudio.Wave;
 
 namespace KeyAsio.Core.Audio.SampleProviders.Limiters;
 
 /// <summary>
-/// A high-performance zero-latency soft limiter designed for rhythm games.
-/// It leaves quiet signals untouched and gently saturates peaks using a cubic polynomial curve.
+/// A zero-latency soft limiter that leaves quiet signals untouched and gently saturates peaks.
+/// SIMD-accelerated for AVX2 and SSE2/AdvSimd targets.
 /// </summary>
 public sealed class PolynomialLimiterProvider : LimiterBase
 {
@@ -24,27 +27,65 @@ public sealed class PolynomialLimiterProvider : LimiterBase
         float ceiling = _ceiling;
         float maxOver = _maxOver;
 
-        for (int i = 0; i < count; i++)
-        {
-            int index = offset + i;
-            float x = buffer[index];
-            float absX = Math.Abs(x);
+        int i = 0;
+        ref float dataRef = ref buffer[offset];
 
+        if (Vector256.IsHardwareAccelerated)
+        {
+            var vThresh = Vector256.Create(threshold);
+            var vCeil = Vector256.Create(ceiling);
+            var vMaxOver = Vector256.Create(maxOver);
+            var vOne = Vector256<float>.One;
+            int limit = count - Vector256<float>.Count;
+
+            for (; i <= limit; i += Vector256<float>.Count)
+            {
+                var vX = Vector256.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+                var vAbs = Vector256.Abs(vX);
+                var processMask = Vector256.GreaterThan(vAbs, vThresh);
+
+                var vOver = vAbs - vThresh;
+                var vSoft = vOver / (vOne + vOver / vMaxOver);
+                var vResult = Vector256.Min(vThresh + vSoft, vCeil);
+                vResult = Vector256.CopySign(vResult, vX);
+
+                vX = Vector256.ConditionalSelect(processMask, vResult, vX);
+                vX.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
+            }
+        }
+
+        var vThresh128 = Vector128.Create(threshold);
+        var vCeil128 = Vector128.Create(ceiling);
+        var vMaxOver128 = Vector128.Create(maxOver);
+        var vOne128 = Vector128<float>.One;
+        int limit128 = count - Vector128<float>.Count;
+
+        for (; i <= limit128; i += Vector128<float>.Count)
+        {
+            var vX = Vector128.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+            var vAbs = Vector128.Abs(vX);
+            var processMask = Vector128.GreaterThan(vAbs, vThresh128);
+
+            var vOver = vAbs - vThresh128;
+            var vSoft = vOver / (vOne128 + vOver / vMaxOver128);
+            var vResult = Vector128.Min(vThresh128 + vSoft, vCeil128);
+            vResult = Vector128.CopySign(vResult, vX);
+
+            vX = Vector128.ConditionalSelect(processMask, vResult, vX);
+            vX.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
+        }
+
+        for (; i < count; i++)
+        {
+            float x = Unsafe.Add(ref dataRef, i);
+            float absX = Math.Abs(x);
             if (absX <= threshold) continue;
 
-            // 目标：将 (Threshold, ∞) 映射到 (Threshold, Ceiling)
-            // 曲线特性：在 Threshold 处斜率为 1 (平滑过渡)，无穷大时趋向 Ceiling
             float over = absX - threshold;
-
-            // 核心算法：y = x / (1 + x / k)
-            // 这个公式极其高效（一次除法），且听感非常像模拟磁带饱和。
             float soft = over / (1.0f + over / maxOver);
-
             float result = threshold + soft;
-
             if (result > ceiling) result = ceiling;
-
-            buffer[index] = Math.Sign(x) * result;
+            Unsafe.Add(ref dataRef, i) = Math.Sign(x) * result;
         }
     }
 
@@ -52,8 +93,6 @@ public sealed class PolynomialLimiterProvider : LimiterBase
     {
         _ceiling = Math.Clamp(ceiling, 0.1f, 1.0f);
         _threshold = Math.Clamp(threshold, 0.1f, _ceiling - 0.01f);
-
-        // 预计算最大过冲量
         _maxOver = _ceiling - _threshold;
     }
 

@@ -1,16 +1,14 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
 using NAudio.Wave;
 
 namespace KeyAsio.Core.Audio.SampleProviders.Limiters;
 
 /// <summary>
 /// A hard clipping limiter that chops off signals exceeding the ceiling.
+/// SIMD-accelerated via vectorized Min/Max.
 /// </summary>
-/// <remarks>
-/// This is the most basic form of limiting.
-/// Pros: Zero CPU usage, Zero latency, Perfectly transparent below threshold.
-/// Cons: Introduces harsh digital distortion (aliasing) when limiting occurs.
-/// Best used as a safety net where limiting is rarely expected to happen.
-/// </remarks>
 public sealed class HardLimiterProvider : LimiterBase
 {
     private float _ceiling = 1.0f;
@@ -28,21 +26,38 @@ public sealed class HardLimiterProvider : LimiterBase
 
     protected override void Process(float[] buffer, int offset, int count)
     {
-        float ceiling = _ceiling;
+        int i = 0;
+        ref float dataRef = ref buffer[offset];
 
-        for (int i = 0; i < count; i++)
+        var vCeil = Vector256.Create(_ceiling);
+        var vNegCeil = Vector256.Create(-_ceiling);
+        int limit256 = count - Vector256<float>.Count;
+
+        for (; i <= limit256; i += Vector256<float>.Count)
         {
-            int index = offset + i;
-            float sample = buffer[index];
+            var v = Vector256.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+            v = Vector256.Min(Vector256.Max(v, vNegCeil), vCeil);
+            v.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
+        }
 
-            if (sample > ceiling)
-            {
-                buffer[index] = ceiling;
-            }
-            else if (sample < -ceiling)
-            {
-                buffer[index] = -ceiling;
-            }
+        var vCeil128 = Vector128.Create(_ceiling);
+        var vNegCeil128 = Vector128.Create(-_ceiling);
+        int limit128 = count - Vector128<float>.Count;
+
+        for (; i <= limit128; i += Vector128<float>.Count)
+        {
+            var v = Vector128.LoadUnsafe(ref Unsafe.Add(ref dataRef, i));
+            v = Vector128.Min(Vector128.Max(v, vNegCeil128), vCeil128);
+            v.StoreUnsafe(ref Unsafe.Add(ref dataRef, i));
+        }
+
+        for (; i < count; i++)
+        {
+            float sample = Unsafe.Add(ref dataRef, i);
+            if (sample > _ceiling)
+                Unsafe.Add(ref dataRef, i) = _ceiling;
+            else if (sample < -_ceiling)
+                Unsafe.Add(ref dataRef, i) = -_ceiling;
         }
     }
 }
